@@ -106,13 +106,16 @@ def main():
         print(df_c.to_string(index=False))
 
     print("\n=== Пол и возраст по видео ===")
-    df_v = fetch_age_gender_per_video(yta, START_DATE, end)
-    path_v = os.path.join(OUTPUT_DIR, "demographics_per_video.csv")
-    df_v.to_csv(path_v, index=False)
-    print(f"Сохранено: {path_v}")
-    if not df_v.empty:
-        print(f"Строк: {len(df_v)}")
-        print(df_v.head(20).to_string(index=False))
+    try:
+        df_v = fetch_age_gender_per_video(yta, START_DATE, end)
+        path_v = os.path.join(OUTPUT_DIR, "demographics_per_video.csv")
+        df_v.to_csv(path_v, index=False)
+        print(f"Сохранено: {path_v}")
+        if not df_v.empty:
+            print(f"Строк: {len(df_v)}")
+            print(df_v.head(20).to_string(index=False))
+    except Exception as e:
+        print(f"API не поддерживает этот запрос (это нормально): {e}")
 
 
 if __name__ == "__main__":
