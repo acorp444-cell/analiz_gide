@@ -35,7 +35,9 @@ def get_credentials():
             creds.refresh(Request())
         else:
             flow = InstalledAppFlow.from_client_secrets_file(CREDENTIALS_FILE, SCOPES)
-            creds = flow.run_local_server(port=0)
+            print("Открываю браузер для входа в Google-аккаунт...")
+            print("Если браузер не открылся сам, скопируйте ссылку, которая появится ниже.")
+            creds = flow.run_local_server(port=8080, open_browser=True)
         with open(TOKEN_FILE, "w") as f:
             f.write(creds.to_json())
     return creds
