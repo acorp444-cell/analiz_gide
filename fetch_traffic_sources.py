@@ -3,14 +3,16 @@
 Показывает, ОТКУДА приходят зрители: рекомендации (Browse/Suggested),
 поиск (Search), внешние ссылки и т.д.
 
-Это ключевая метрика: если Browse+Suggested < 50% — алгоритм не продвигает видео.
+Это ключевая метрика: если SUBSCRIBER+RELATED_VIDEO < 50% — алгоритм не продвигает видео.
 
 Использует тот же token_video.json, что и fetch_video_report.py.
 Запуск: python fetch_traffic_sources.py
 """
 
 import os
+import sys
 import datetime
+import time
 import pandas as pd
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
@@ -25,6 +27,20 @@ CREDENTIALS_FILE = "credentials.json"
 TOKEN_FILE = "token_video.json"
 OUTPUT_DIR = "data"
 START_DATE = "2015-01-01"
+
+VIDEO_IDS = [
+    ("vyEer_SFc3M", "Чернобыль звери"),
+    ("qRE5nQ15p0E", "Маяк/Карачай"),
+    ("AGdOUblOl1s", "Ракетные шахты"),
+    ("IHjROJiFo3c", "Аральское море"),
+    ("xqZcaako6_o", "Колыма"),
+    ("ZkOJ8vKrZzA", "Семипалатинск"),
+    ("mcHyhcorjII", "Рыжий лес"),
+    ("nVrYVJZOBlo", "Новая Земля"),
+    ("4uwnkorhxXc", "Припять дом"),
+    ("RObXEmfDVV0", "Фукусима"),
+    ("olR8WVAr5TY", "ЗФИ"),
+]
 
 
 def get_credentials():
@@ -67,35 +83,16 @@ def fetch_channel_traffic(yta, start, end):
     return pd.DataFrame(resp.get("rows", []), columns=cols)
 
 
-def fetch_video_list(youtube_data):
-    """Получает список видео канала для маппинга ID → название."""
-    videos = {}
-    request = youtube_data.search().list(
-        part="snippet",
-        forMine=True,
-        type="video",
-        maxResults=50,
-        order="date",
-    )
-    while request:
-        response = request.execute()
-        for item in response.get("items", []):
-            vid = item["id"]["videoId"]
-            videos[vid] = item["snippet"]["title"]
-        request = youtube_data.search().list_next(request, response)
-    return videos
-
-
-def fetch_traffic_per_video(yta, start, end):
-    """Источники трафика в разрезе видео."""
+def fetch_traffic_for_video(yta, video_id, start, end):
+    """Источники трафика для ОДНОГО видео (через фильтр, не dimension)."""
     resp = yta.reports().query(
         ids="channel==MINE",
         startDate=start,
         endDate=end,
         metrics="views,estimatedMinutesWatched",
-        dimensions="video,insightTrafficSourceType",
+        dimensions="insightTrafficSourceType",
+        filters=f"video=={video_id}",
         sort="-views",
-        maxResults=500,
     ).execute()
     cols = [h["name"] for h in resp["columnHeaders"]]
     return pd.DataFrame(resp.get("rows", []), columns=cols)
@@ -104,7 +101,6 @@ def fetch_traffic_per_video(yta, start, end):
 def main():
     creds = get_credentials()
     yta = build("youtubeAnalytics", "v2", credentials=creds)
-    youtube_data = build("youtube", "v3", credentials=creds)
     end = datetime.date.today().isoformat()
     os.makedirs(OUTPUT_DIR, exist_ok=True)
 
@@ -118,43 +114,69 @@ def main():
         total = df_ch["views"].sum()
         df_ch["share_pct"] = (df_ch["views"] / total * 100).round(1)
         print(df_ch.to_string(index=False))
-        browse = df_ch.loc[
-            df_ch["insightTrafficSourceType"].isin(["SUBSCRIBER", "SUGGESTED", "YT_SEARCH"]),
+        algo = df_ch.loc[
+            df_ch["insightTrafficSourceType"].isin(
+                ["SUBSCRIBER", "RELATED_VIDEO", "YT_SEARCH"]
+            ),
             "share_pct",
         ].sum()
-        print(f"\nAlgorithmic (Browse+Suggested+Search): {browse:.1f}%")
+        print(f"\nАлгоритмический трафик (подписчики + рекомендации + поиск): {algo:.1f}%")
 
-    # 2. Трафик в разрезе видео
+    # 2. Трафик по каждому видео отдельно
     print("\n=== Источники трафика по видео ===")
-    try:
-        df_v = fetch_traffic_per_video(yta, START_DATE, end)
-        path_v = os.path.join(OUTPUT_DIR, "traffic_per_video.csv")
-        df_v.to_csv(path_v, index=False)
-        print(f"Сохранено: {path_v}")
+    all_rows = []
+    for vid, name in VIDEO_IDS:
+        print(f"  {name}...", end=" ", flush=True)
+        try:
+            df_v = fetch_traffic_for_video(yta, vid, START_DATE, end)
+            if not df_v.empty:
+                df_v["video_id"] = vid
+                df_v["video_name"] = name
+                all_rows.append(df_v)
+                total_v = df_v["views"].sum()
+                sub = df_v.loc[
+                    df_v["insightTrafficSourceType"] == "SUBSCRIBER", "views"
+                ].sum()
+                rel = df_v.loc[
+                    df_v["insightTrafficSourceType"] == "RELATED_VIDEO", "views"
+                ].sum()
+                algo_pct = (sub + rel) / total_v * 100 if total_v > 0 else 0
+                print(
+                    f"{total_v:>10,} просм. | "
+                    f"подписчики {sub / total_v * 100:4.1f}% | "
+                    f"рекоменд. {rel / total_v * 100:4.1f}% | "
+                    f"алго {algo_pct:4.1f}%"
+                )
+            else:
+                print("нет данных")
+            time.sleep(0.3)
+        except Exception as e:
+            print(f"ошибка: {e}")
 
-        if not df_v.empty:
-            # Маппинг ID → название
-            titles = fetch_video_list(youtube_data)
+    if all_rows:
+        df_all = pd.concat(all_rows, ignore_index=True)
+        path_all = os.path.join(OUTPUT_DIR, "traffic_per_video.csv")
+        df_all.to_csv(path_all, index=False)
+        print(f"\nСохранено: {path_all}")
 
-            # Сводная таблица: видео × источник → просмотры
-            pivot = df_v.pivot_table(
-                index="video",
-                columns="insightTrafficSourceType",
-                values="views",
-                aggfunc="sum",
-                fill_value=0,
-            )
-            pivot["total"] = pivot.sum(axis=1)
-            pivot = pivot.sort_values("total", ascending=False)
-            pivot["title"] = pivot.index.map(lambda v: titles.get(v, v[:12]))
+        # Сводная таблица
+        pivot = df_all.pivot_table(
+            index=["video_id", "video_name"],
+            columns="insightTrafficSourceType",
+            values="views",
+            aggfunc="sum",
+            fill_value=0,
+        )
+        pivot["TOTAL"] = pivot.sum(axis=1)
+        if "SUBSCRIBER" in pivot.columns and "RELATED_VIDEO" in pivot.columns:
+            pivot["ALGO_PCT"] = (
+                (pivot["SUBSCRIBER"] + pivot["RELATED_VIDEO"]) / pivot["TOTAL"] * 100
+            ).round(1)
+        pivot = pivot.sort_values("TOTAL", ascending=False)
 
-            path_pivot = os.path.join(OUTPUT_DIR, "traffic_pivot.csv")
-            pivot.to_csv(path_pivot)
-            print(f"Сводная таблица: {path_pivot}")
-            print(pivot.head(15).to_string())
-    except Exception as e:
-        print(f"Ошибка при запросе по видео: {e}")
-        print("Канальные данные выше всё равно сохранены.")
+        path_pivot = os.path.join(OUTPUT_DIR, "traffic_pivot.csv")
+        pivot.to_csv(path_pivot)
+        print(f"Сводная таблица: {path_pivot}")
 
 
 if __name__ == "__main__":
