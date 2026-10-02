@@ -40,6 +40,7 @@ VIDEO_IDS = [
     ("4uwnkorhxXc", "Припять дом"),
     ("RObXEmfDVV0", "Фукусима"),
     ("olR8WVAr5TY", "ЗФИ"),
+    ("uvtYW2vgPXQ", "Рыбы Припяти"),
 ]
 
 
@@ -180,4 +181,10 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as e:
+        print(f"\n!!! ОШИБКА: {e}")
+        import traceback
+        traceback.print_exc()
+    input("\nНажмите Enter, чтобы закрыть окно...")
